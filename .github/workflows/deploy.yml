@@ -1,34 +1,49 @@
-name: CI/CD Deploy to AWS
+steps:
+  - name: Checkout Code
+    uses: actions/checkout@v4
 
-on:
-  push:
-    branches:
-      - main
+  - name: Setup Node.js
+    uses: actions/setup-node@v4
+    with:
+      node-version: '24'
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  - name: Cache node modules
+    uses: actions/cache@v4
+    with:
+      path: ~/.npm
+      key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+      restore-keys: |
+        ${{ runner.os }}-node-
 
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+  - name: Install Dependencies
+    run: npm ci
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
+  - name: Build React App
+    run: npm run build
 
-      - name: Install Dependencies
-        run: npm install
+  - name: Upload build to EC2 (SCP)
+    uses: appleboy/scp-action@v0.1.7
+    with:
+      host: ${{ secrets.EC2HOST }}
+      username: ${{ secrets.EC2USER }}
+      key: ${{ secrets.EC2_KEY }}
+      source: "build/"
+      target: "/tmp/build"
 
-      - name: Build React App
-        run: npm run build
+  - name: Final Deploy on EC2 (SSH)
+    uses: appleboy/ssh-action@v1.0.3
+    with:
+      host: ${{ secrets.EC2HOST }}
+      username: ${{ secrets.EC2USER }}
+      key: ${{ secrets.EC2_KEY }}
+      script: |
+        sudo rm -rf /var/www/html/*
+        if [ -d "/tmp/build" ]; then
+          sudo cp -r /tmp/build/* /var/www/html/
+        else
+          echo "Error: /tmp/build not found on remote server"
+          exit 1
+        fi
+        sudo chown -R www-data:www-data /var/www/html
+        sudo systemctl restart nginx
 
-      - name: Deploy to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_KEY }}
-          source: "build/*"
-          target: "/tmp/build"
